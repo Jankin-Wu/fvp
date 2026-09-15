@@ -38,6 +38,14 @@
 /// Detaches the renderer and releases the native player wrapper.
 - (void)dispose;
 
+/// Detaches whichever view currently owns `playerHandle`'s render target.
+///
+/// Called from the platform channel when Dart disposes the player. The detach
+/// cannot live in the NSView lifecycle: Flutter's compositor removes and
+/// re-inserts platform views on every presented frame, and mdk asserts if its
+/// render callback is changed from that path.
++ (void)detachPlayerHandle:(int64_t)playerHandle;
+
 @end
 
 /// Creates `FvpVideoView`s for the `fvp/video-view` platform view type.

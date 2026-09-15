@@ -74,8 +74,13 @@ class Player {
             // prepared
             final pos = message[1] as int;
             _live = message[2] as bool;
-            if (!_prepared.isCompleted) {
-              _prepared.complete(pos);
+            // Settle the oldest outstanding prepare; that is the one this
+            // answer belongs to.
+            if (_preparedQueue.isNotEmpty) {
+              final prepared = _preparedQueue.removeAt(0);
+              if (!prepared.isCompleted) {
+                prepared.complete(pos);
+              }
             }
             rep.ref.prepared.ret = true;
             rep.ref.prepared.boost = true;
@@ -146,6 +151,13 @@ class Player {
   void dispose() async {
     if (_pp == nullptr) {
       return;
+    }
+    // Detach the platform-view renderer before the handle goes away. This has
+    // to happen here rather than in the native view's lifecycle: Flutter's
+    // compositor removes and re-inserts platform views on every presented
+    // frame, and mdk asserts if its render callback is changed from there.
+    if (platformViewAttached.value) {
+      await FvpPlatform.instance.releasePlatformView(nativeHandle);
     }
     // await: ensure no player ref in fvp plugin before mdkPlayerAPI_delete() in dart
     await updateTexture(width: -1);
@@ -435,14 +447,16 @@ class Player {
       {int position = 0,
       SeekFlag flags = const SeekFlag(SeekFlag.defaultFlags),
       Future<bool> Function()? callback}) async {
-    _prepared = Completer<int>();
+    final prepared = Completer<int>();
+    _preparedQueue.add(prepared);
     Libfvp.registerType(nativeHandle, 3, true);
     _prepareCb = callback;
     if (!Libfvp.prepare(nativeHandle, position, flags.rawValue,
         NativeApi.postCObject.cast(), _receivePort.sendPort.nativePort)) {
-      _prepared.complete(-10);
+      _preparedQueue.remove(prepared);
+      prepared.complete(-10);
     }
-    return _prepared.future;
+    return prepared.future;
   }
 
   /// Set decoder priority.
@@ -808,7 +822,14 @@ class Player {
   bool _live = false;
   int _texId = -1;
   var _videoSize = Completer<ui.Size?>();
-  var _prepared = Completer<int>();
+  /// Pending prepare() calls, oldest first.
+  ///
+  /// A single mutable completer cannot represent this: prepare() may be called
+  /// again before the previous one is answered (switching quality reopens the
+  /// media), and replacing the field would orphan the earlier caller's future,
+  /// leaving its `await` pending forever. Keeping a queue lets a late answer
+  /// settle the call it belongs to.
+  final _preparedQueue = <Completer<int>>[];
   Completer<Uint8List?>? _snapshot;
   Completer<int>? _seeked;
   final _receivePort = ReceivePort();

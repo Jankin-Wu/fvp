@@ -139,6 +139,16 @@ private:
         [_texRegistry unregisterTexture:texId];
         players.erase(texId);
         result(nil);
+    } else if ([call.method isEqualToString:@"ReleasePlatformView"]) {
+        // Detach the platform-view renderer for this player. Called from Dart
+        // when the player is disposed — the one point where the player is known
+        // to be going away for good. It cannot be done from the NSView
+        // lifecycle: Flutter's compositor removes and re-inserts platform views
+        // on every presented frame, and mdk asserts if the render callback is
+        // changed from there.
+        const auto handle = ((NSNumber*)call.arguments[@"player"]).longLongValue;
+        [FvpVideoView detachPlayerHandle:handle];
+        result(nil);
     } else {
         result(FlutterMethodNotImplemented);
     }

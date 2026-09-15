@@ -40,4 +40,11 @@ class MethodChannelFvp extends FvpPlatform {
       "texture": textureId,
     });
   }
+
+  @override
+  Future<void> releasePlatformView(int playerHandle) async {
+    await methodChannel.invokeMethod('ReleasePlatformView', {
+      "player": playerHandle,
+    });
+  }
 }
