@@ -28,9 +28,14 @@ public:
     LayerPlayer(int64_t handle, CAMetalLayer* layer, int width, int height)
         : Player(reinterpret_cast<mdkPlayerAPI*>(handle)), layer_(layer)
     {
+        // Selecting Metal without describing a foreign context. `device` /
+        // `cmdQueue` / `texture` are documented as foreign-context-only, so
+        // they stay null and mdk creates the rendering context and its loop
+        // itself. `layer` is not foreign-context-only: mdk applies the
+        // per-frame HDR/SDR colorspace parameters to it, which is what makes
+        // HDR presentation work at all.
         MetalRenderAPI ra{};
-        // The layer is what makes mdk negotiate HDR with the display: it
-        // applies the colorspace parameters for hdr/sdr video frames to it.
+        ra.device = (__bridge void*)MTLCreateSystemDefaultDevice();
         ra.layer = (__bridge void*)layer_;
         ra.colorFormat = (unsigned)layer_.pixelFormat;
         setRenderAPI(&ra);
@@ -42,46 +47,27 @@ public:
         // default) tone maps every HDR source down to SDR.
         set(ColorSpaceUnknown);
 
-        setVideoSurfaceSize(width, height);
-
-        // renderVideo() MUST NOT be called from the callback itself (mdk holds
-        // render_mtx_ while invoking it, so an inline call deadlocks). Schedule
-        // it onto a serial queue instead; coalesce so a burst of frames does
-        // not queue more work than the display can consume.
-        setRenderCallback([this](void*){
-            scheduleRender();
-        });
+        // This is the "render on a platform surface" mode: mdk creates and
+        // drives its own rendering loop against the layer. That is required
+        // for the layer path — mdk only applies the per-frame HDR/SDR
+        // colorspace choice and presents the drawable from inside its own
+        // loop. Driving renderVideo() from our side instead would render into
+        // a drawable nobody presents, leaving the view black.
+        updateNativeSurface((__bridge void*)layer_, width, height);
     }
 
     ~LayerPlayer() override {
-        setRenderCallback(nullptr);
-        setVideoSurfaceSize(-1, -1);
+        // A null surface tears the renderer down while the player lives.
+        updateNativeSurface(nullptr);
         disposed_.store(true);
     }
 
     void setSurfaceSize(int width, int height) {
-        setVideoSurfaceSize(width, height);
-        scheduleRender();
+        updateNativeSurface((__bridge void*)layer_, width, height);
     }
 
 private:
-    void scheduleRender() {
-        if (disposed_.load() || scheduled_.exchange(true)) {
-            return;
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            this->scheduled_.store(false);
-            if (this->disposed_.load()) {
-                return;
-            }
-            @autoreleasepool {
-                this->renderVideo();
-            }
-        });
-    }
-
     CAMetalLayer* layer_ = nil;
-    std::atomic<bool> scheduled_{false};
     std::atomic<bool> disposed_{false};
 };
 
@@ -136,6 +122,7 @@ private:
         }
 
         _player = std::make_shared<LayerPlayer>(playerHandle, _metalLayer, width, height);
+
     }
     return self;
 }
@@ -196,6 +183,13 @@ private:
 @end
 
 @implementation FvpVideoViewFactory
+
+/// Flutter only decodes the Dart-side creation parameters when the factory
+/// declares the codec they were encoded with. Without this the factory is
+/// handed nil arguments and every field reads back as 0.
+- (NSObject<FlutterMessageCodec>*)createArgsCodec {
+    return [FlutterStandardMessageCodec sharedInstance];
+}
 
 - (NSView*)createWithViewIdentifier:(int64_t)viewId
                      arguments:(id _Nullable)args

@@ -240,6 +240,10 @@ class Player {
     };
     if (Platform.isMacOS) {
       return AppKitView(
+        // A stable key: without it Flutter cannot match this view across
+        // rebuilds and recreates the native view (and its renderer) every
+        // frame, which tears the surface down before any picture is presented.
+        key: ValueKey<String>('fvp-platform-view-$nativeHandle'),
         viewType: 'fvp/video-view',
         layoutDirection: TextDirection.ltr,
         creationParams: params,
