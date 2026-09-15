@@ -28,16 +28,28 @@ public:
     LayerPlayer(int64_t handle, CAMetalLayer* layer, int width, int height)
         : Player(reinterpret_cast<mdkPlayerAPI*>(handle)), layer_(layer)
     {
-        // Selecting Metal without describing a foreign context. `device` /
-        // `cmdQueue` / `texture` are documented as foreign-context-only, so
-        // they stay null and mdk creates the rendering context and its loop
-        // itself. `layer` is not foreign-context-only: mdk applies the
-        // per-frame HDR/SDR colorspace parameters to it, which is what makes
-        // HDR presentation work at all.
+        device_ = MTLCreateSystemDefaultDevice();
+        cmdQueue_ = [device_ newCommandQueue];
+
         MetalRenderAPI ra{};
-        ra.device = (__bridge void*)MTLCreateSystemDefaultDevice();
+        ra.device = (__bridge void*)device_;
+        ra.cmdQueue = (__bridge void*)cmdQueue_;
         ra.layer = (__bridge void*)layer_;
         ra.colorFormat = (unsigned)layer_.pixelFormat;
+        // mdk has to be able to obtain a drawable for each frame it renders.
+        // This callback is how the renderer gets its render target: without it
+        // mdk has nowhere to draw and the view stays black.
+        ra.opaque = (void*)this;
+        ra.currentRenderTarget = [](const void* opaque) -> const void* {
+            LayerPlayer* p = (LayerPlayer*)opaque;
+            // The same drawable is presented after renderVideo(), so it is
+            // acquired here and handed to mdk as the render target.
+            if (!p->pendingDrawable_) {
+                p->pendingDrawable_ = [p->layer_ nextDrawable];
+            }
+            return p->pendingDrawable_
+                ? (__bridge const void*)p->pendingDrawable_.texture : nullptr;
+        };
         setRenderAPI(&ra);
 
         // ColorSpaceUnknown tells the renderer to follow the decoded frame's
@@ -47,27 +59,57 @@ public:
         // default) tone maps every HDR source down to SDR.
         set(ColorSpaceUnknown);
 
-        // This is the "render on a platform surface" mode: mdk creates and
-        // drives its own rendering loop against the layer. That is required
-        // for the layer path — mdk only applies the per-frame HDR/SDR
-        // colorspace choice and presents the drawable from inside its own
-        // loop. Driving renderVideo() from our side instead would render into
-        // a drawable nobody presents, leaving the view black.
-        updateNativeSurface((__bridge void*)layer_, width, height);
+        setVideoSurfaceSize(width, height);
+
+        // Foreign render-pass mode: mdk tells us when a frame is ready and we
+        // render it into the drawable obtained by currentRenderTarget.
+        // renderVideo() MUST NOT be called from inside the callback (mdk holds
+        // its render mutex while invoking it), so it is scheduled instead.
+        setRenderCallback([this](void*){
+            scheduleRender();
+        });
     }
 
     ~LayerPlayer() override {
-        // A null surface tears the renderer down while the player lives.
-        updateNativeSurface(nullptr);
+        setRenderCallback(nullptr);
+        setVideoSurfaceSize(-1, -1);
         disposed_.store(true);
     }
 
     void setSurfaceSize(int width, int height) {
-        updateNativeSurface((__bridge void*)layer_, width, height);
+        setVideoSurfaceSize(width, height);
+        scheduleRender();
     }
 
 private:
+    void scheduleRender() {
+        if (disposed_.load() || scheduled_.exchange(true)) {
+            return;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            this->scheduled_.store(false);
+            if (this->disposed_.load()) {
+                return;
+            }
+            @autoreleasepool {
+                if (!this->pendingDrawable_) {
+                    this->pendingDrawable_ = [this->layer_ nextDrawable];
+                }
+                double ts = this->renderVideo();
+                [this->pendingDrawable_ present];
+                this->pendingDrawable_ = nil;
+            }
+        });
+    }
+
+public:
     CAMetalLayer* layer_ = nil;
+    id<MTLDevice> device_ = nil;
+    id<MTLCommandQueue> cmdQueue_ = nil;
+    id<CAMetalDrawable> pendingDrawable_ = nil;
+
+private:
+    std::atomic<bool> scheduled_{false};
     std::atomic<bool> disposed_{false};
 };
 
