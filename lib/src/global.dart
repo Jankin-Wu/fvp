@@ -152,6 +152,19 @@ enum ColorSpace {
 
   final int rawValue;
   const ColorSpace(this.rawValue);
+
+  /// Maps an `MDK_ColorSpace` value to its enum. Values not exposed by this
+  /// enum (scRGB, extended sRGB/P3) map to [unknown].
+  factory ColorSpace.from(int rawValue) {
+    switch (rawValue) {
+      case MDK_ColorSpace.MDK_ColorSpace_BT709:
+        return bt709;
+      case MDK_ColorSpace.MDK_ColorSpace_BT2100_PQ:
+        return bt2100PQ;
+      default:
+        return unknown;
+    }
+  }
 }
 
 enum LogLevel {

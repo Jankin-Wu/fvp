@@ -5,6 +5,7 @@ import 'dart:ffi';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'generated_bindings.dart';
+import 'global.dart';
 
 import 'lib.dart';
 
@@ -118,6 +119,13 @@ class VideoCodecParameters extends CodecParameters {
   /// pixel aspect ratio
   double par = 1.0;
 
+  /// Colour space of the decoded frames. `ColorSpace.bt2100PQ` marks an HDR
+  /// (PQ) stream; rendering it through a non-EDR target tone maps it to SDR.
+  ColorSpace colorSpace = ColorSpace.unknown;
+
+  /// Dolby Vision profile, 0 when the stream is not Dolby Vision.
+  int doviProfile = 0;
+
   VideoCodecParameters();
 
   VideoCodecParameters._from(mdkVideoCodecParameters cp) {
@@ -138,6 +146,8 @@ class VideoCodecParameters extends CodecParameters {
     if (cp.par > 0) {
       par = cp.par;
     }
+    colorSpace = ColorSpace.from(cp.color_space);
+    doviProfile = cp.dovi_profile;
   }
 
   @override

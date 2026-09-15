@@ -736,7 +736,13 @@ final class mdkVideoCodecParameters extends ffi.Struct {
   @ffi.Float()
   external double par;
 
-  @ffi.Array.multi([128])
+  @ffi.Int32()
+  external int color_space;
+
+  @ffi.Uint8()
+  external int dovi_profile;
+
+  @ffi.Array.multi([123])
   external ffi.Array<ffi.Char> reserved;
 }
 

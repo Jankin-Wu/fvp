@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 import 'dart:async';
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
@@ -10,6 +11,10 @@ import 'dart:ui' as ui;
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart' show PlatformViewHitTestBehavior;
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 import 'fvp_platform_interface.dart';
@@ -155,6 +160,7 @@ class Player {
     Libmdk.instance.mdkPlayerAPI_delete(_pp);
     calloc.free(_pp);
     _pp = nullptr;
+    platformViewAttached.dispose();
   }
 
   /// Release current texture then create a new one for current [media], and update [textureId].
@@ -187,6 +193,84 @@ class Player {
     }
     // release texture if width or height <= 0
     return _texId;
+  }
+
+  /// Whether this player renders through a platform view rather than a
+  /// Flutter texture.
+  final platformViewAttached = ValueNotifier<bool>(false);
+
+  /// Switch this player to a platform-view renderer.
+  ///
+  /// Unlike [updateTexture] this creates no Flutter texture: the caller embeds
+  /// a platform view (see [buildPlatformView]) whose native renderer attaches
+  /// to this player. Use it when the decoded stream is HDR — the Flutter
+  /// texture path is 8-bit and tone maps HDR to SDR, while the platform view's
+  /// EDR-enabled CAMetalLayer can present it natively.
+  ///
+  /// Returns true when the switch was applied; false when the platform has no
+  /// platform-view renderer or the video size is not known yet.
+  Future<bool> usePlatformView() async {
+    if (!(Platform.isMacOS || Platform.isAndroid)) {
+      return false;
+    }
+    if (await _videoSize.future == null) {
+      return false;
+    }
+    if (_texId >= 0) {
+      textureId.value = null;
+      await FvpPlatform.instance.releaseTexture(nativeHandle, _texId);
+      _texId = -1;
+    }
+    platformViewAttached.value = true;
+    return true;
+  }
+
+  /// Widget presenting this player's platform-view renderer.
+  ///
+  /// Only valid after [usePlatformView] returned true. On macOS the native
+  /// layer composites above Flutter's own layers, so widgets the caller stacks
+  /// over this view are not visible; overlays that must appear on top of the
+  /// video have to be rendered natively or placed outside the video's bounds.
+  Widget buildPlatformView({int? width, int? height}) {
+    final params = <String, Object>{
+      'player': nativeHandle,
+      'width': width ?? 0,
+      'height': height ?? 0,
+      'tunnel': false,
+    };
+    if (Platform.isMacOS) {
+      return AppKitView(
+        viewType: 'fvp/video-view',
+        layoutDirection: TextDirection.ltr,
+        creationParams: params,
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: (_) {},
+      );
+    }
+    return PlatformViewLink(
+      viewType: 'fvp/video-view',
+      surfaceFactory: (context, controller) {
+        return AndroidViewSurface(
+          controller: controller as AndroidViewController,
+          gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+          hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+        );
+      },
+      onCreatePlatformView: (viewParams) {
+        final controller = PlatformViewsService.initExpensiveAndroidView(
+          id: viewParams.id,
+          viewType: 'fvp/video-view',
+          layoutDirection: TextDirection.ltr,
+          creationParams: params,
+          creationParamsCodec: const StandardMessageCodec(),
+        );
+        controller.addOnPlatformViewCreatedListener(
+          viewParams.onPlatformViewCreated,
+        );
+        controller.create();
+        return controller;
+      },
+    );
   }
 
   /// Mute the audio or not
