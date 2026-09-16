@@ -10,8 +10,6 @@ import 'dart:ui' as ui;
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 import 'fvp_platform_interface.dart';
@@ -175,14 +173,13 @@ class Player {
   void dispose() async {
     if (_pp == nullptr) {
       textureId.dispose();
-      platformViewAttached.dispose();
       return;
     }
     // Detach the platform-view renderer before the handle goes away. This has
     // to happen here rather than in the native view's lifecycle: Flutter's
     // compositor removes and re-inserts platform views on every presented
     // frame, and mdk asserts if its render callback is changed from there.
-    if (platformViewAttached.value) {
+    if (_platformViewAttached) {
       await FvpPlatform.instance.releasePlatformView(nativeHandle);
     }
     // await: ensure no player ref in fvp plugin before mdkPlayerAPI_delete() in dart
@@ -202,7 +199,6 @@ class Player {
     calloc.free(_pp);
     _pp = nullptr;
     textureId.dispose();
-    platformViewAttached.dispose();
   }
 
   /// Release current texture then create a new one for current [media], and update [textureId].
@@ -247,16 +243,17 @@ class Player {
 
   /// Whether this player renders through a platform view rather than a
   /// Flutter texture.
-  final platformViewAttached = ValueNotifier<bool>(false);
+  bool _platformViewAttached = false;
 
   /// Switch this player to the platform-view renderer.
   ///
   /// Unlike [updateTexture] this creates no Flutter texture: the caller embeds
-  /// a platform view (see [buildPlatformView]) whose native renderer attaches
-  /// to this player. Use it when the decoded stream is HDR — the Flutter
-  /// texture path is 8-bit and tone maps HDR to SDR, while the platform view's
-  /// EDR-enabled CAMetalLayer can present it natively. Call [updateTexture]
-  /// again to switch back to the texture renderer.
+  /// a platform view whose native renderer attaches to this player (see
+  /// MdkVideoPlayerPlatform.buildViewWithOptions). Use it when the decoded
+  /// stream is HDR — the Flutter texture path is 8-bit and tone maps HDR to
+  /// SDR, while the platform view's EDR-enabled CAMetalLayer can present it
+  /// natively. Call [updateTexture] again to switch back to the texture
+  /// renderer.
   ///
   /// Returns true when the switch was applied; false when the platform has no
   /// platform-view renderer or the video size is not known yet.
@@ -271,34 +268,8 @@ class Player {
       await FvpPlatform.instance.releaseTexture(nativeHandle, textureId.value!);
       textureId.value = null;
     }
-    platformViewAttached.value = true;
+    _platformViewAttached = true;
     return true;
-  }
-
-  /// Widget presenting this player's platform-view renderer.
-  ///
-  /// Only valid after [usePlatformView] returned true. On macOS the native
-  /// layer composites above Flutter's own layers, so widgets the caller stacks
-  /// over this view are not visible; overlays that must appear on top of the
-  /// video have to be rendered natively or placed outside the video's bounds.
-  Widget buildPlatformView({int? width, int? height}) {
-    final params = <String, Object>{
-      'player': nativeHandle,
-      'width': width ?? 0,
-      'height': height ?? 0,
-      'tunnel': false,
-    };
-    return AppKitView(
-      // A stable key: without it Flutter cannot match this view across
-      // rebuilds and recreates the native view (and its renderer) every
-      // frame, which tears the surface down before any picture is presented.
-      key: ValueKey<String>('fvp-platform-view-$nativeHandle'),
-      viewType: 'fvp/video-view',
-      layoutDirection: TextDirection.ltr,
-      creationParams: params,
-      creationParamsCodec: const StandardMessageCodec(),
-      onPlatformViewCreated: (_) {},
-    );
   }
 
   /// Mute the audio or not
