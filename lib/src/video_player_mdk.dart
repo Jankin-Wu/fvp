@@ -274,9 +274,13 @@ class MdkVideoPlayerPlatform extends VideoPlayerPlatform {
 
   @override
   Future<int?> createWithOptions(VideoCreationOptions options) {
-    // SurfaceView output is Android-only; other platforms keep the texture.
-    return _create(options.dataSource,
-        Platform.isAndroid ? options.viewType : VideoViewType.textureView);
+    // Platform-view output is Android (SurfaceView) and macOS (HDR-capable
+    // CAMetalLayer view); other platforms keep the texture.
+    return _create(
+        options.dataSource,
+        Platform.isAndroid || Platform.isMacOS
+            ? options.viewType
+            : VideoViewType.textureView);
   }
 
   @override
@@ -341,11 +345,12 @@ class MdkVideoPlayerPlatform extends VideoPlayerPlatform {
       return -hashCode;
     }
     if (viewType == VideoViewType.platformView) {
-      // SurfaceView output (Android): no Flutter texture. The surface is
-      // created by the FvpVideoView platform view and attached to the player
-      // natively; buffers are sized to the video so TVs with an upscaled UI
-      // layer (e.g. 1080p UI on a 4K panel) still scan out at full video
-      // resolution. playerId is the native handle instead of a texture id.
+      // Platform view output: no Flutter texture. The render target is
+      // created by the platform view and attached to the player natively —
+      // SurfaceView on Android (buffers sized to the video, so TVs with an
+      // upscaled UI layer still scan out at full video resolution),
+      // HDR-capable CAMetalLayer view on macOS. playerId is the native
+      // handle instead of a texture id.
       final size = await player.textureSize;
       if (size == null || size.width <= 0 || size.height <= 0) {
         _players[-hashCode] = player;
@@ -356,6 +361,23 @@ class MdkVideoPlayerPlatform extends VideoPlayerPlatform {
         return -hashCode;
       }
       final id = player.nativeHandle;
+      if (Platform.isMacOS) {
+        // macOS HDR view: renders at the video's own resolution into an
+        // EDR-enabled CAMetalLayer; the max-size clamp below is the Android
+        // SurfaceFlinger workaround and does not apply.
+        await player.usePlatformView();
+        _platformViewParams[id] = <String, Object>{
+          'player': player.nativeHandle,
+          'width': size.width.toInt(),
+          'height': size.height.toInt(),
+          'tunnel': false,
+        };
+        _log.fine(
+            '$hashCode player${player.nativeHandle} macOS platform view, '
+            'video ${size.width.toInt()}x${size.height.toInt()}');
+        _players[id] = player;
+        return id;
+      }
       // Clamp the GL render target as the texture path does — full 4K RGBA can
       // push SurfaceFlinger into GPU composition on weak GPUs. "tunnel" has no
       // GL renderer, so the decoder's own geometry stands.
@@ -491,6 +513,24 @@ class MdkVideoPlayerPlatform extends VideoPlayerPlatform {
     if (creationParams == null) {
       // Texture player (default).
       return buildView(playerId);
+    }
+    if (Platform.isMacOS) {
+      // HDR-capable CAMetalLayer-backed view. The native layer composites
+      // above Flutter's own layers, so widgets stacked over the video area
+      // are not visible; overlays must be rendered natively or placed
+      // outside the video's bounds.
+      return AppKitView(
+        // A stable key: without it Flutter cannot match this view across
+        // rebuilds and recreates the native view (and its renderer) every
+        // frame, which tears the surface down before any picture is
+        // presented.
+        key: ValueKey<String>('fvp-platform-view-$playerId'),
+        viewType: 'fvp/video-view',
+        layoutDirection: TextDirection.ltr,
+        creationParams: creationParams,
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: (_) {},
+      );
     }
     // SurfaceView requires hybrid composition (initExpensiveAndroidView):
     // under Flutter's default TLHC mode a SurfaceView draws at the wrong
