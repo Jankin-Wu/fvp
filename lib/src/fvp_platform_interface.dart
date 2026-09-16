@@ -41,6 +41,12 @@ abstract class FvpPlatform extends PlatformInterface {
     throw UnimplementedError('releaseTexture() has not been implemented.');
   }
 
+  /// Detaches the platform-view renderer bound to [playerHandle].
+  ///
+  /// Called when the player is disposed. No-op on platforms without a
+  /// platform-view renderer.
+  Future<void> releasePlatformView(int playerHandle) async {}
+
   Future<void> setMixWithOthers(bool mixWithOthers) async {
     throw UnimplementedError('setMixWithOthers() has not been implemented.');
   }

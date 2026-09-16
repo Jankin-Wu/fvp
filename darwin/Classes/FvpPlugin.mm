@@ -5,6 +5,11 @@
 #define USE_TEXCACHE 0
 
 #import "FvpPlugin.h"
+#if TARGET_OS_OSX
+// macOS-only: HDR-capable CAMetalLayer-backed platform view. This source is
+// also compiled for iOS, where AppKit and CAMetalLayer are unavailable.
+#import "FvpVideoView.h"
+#endif
 #include "mdk/RenderAPI.h"
 #include "mdk/Player.h"
 #import <AVFoundation/AVFoundation.h>
@@ -141,6 +146,12 @@ private:
 #endif
     [registrar publish:instance];
     [registrar addMethodCallDelegate:instance channel:channel];
+#if TARGET_OS_OSX
+    // VideoViewType.platformView on macOS: presents through an HDR-capable
+    // CAMetalLayer owned by the view instead of a Flutter texture.
+    [registrar registerViewFactory:[[FvpVideoViewFactory alloc] init]
+                            withId:@"fvp/video-view"];
+#endif
 }
 
 - (instancetype)initWithRegistrar:(NSObject<FlutterPluginRegistrar>*)registrar {
@@ -165,6 +176,18 @@ private:
         const auto texId = ((NSNumber*)call.arguments[@"texture"]).longLongValue;
         [_texRegistry unregisterTexture:texId];
         players.erase(texId);
+        result(nil);
+    } else if ([call.method isEqualToString:@"ReleasePlatformView"]) {
+        // Detach the platform-view renderer for this player. Called from Dart
+        // when the player is disposed — the one point where the player is known
+        // to be going away for good. It cannot be done from the NSView
+        // lifecycle: Flutter's compositor removes and re-inserts platform views
+        // on every presented frame, and mdk asserts if the render callback is
+        // changed from there.
+#if TARGET_OS_OSX
+        const auto handle = ((NSNumber*)call.arguments[@"player"]).longLongValue;
+        [FvpVideoView detachPlayerHandle:handle];
+#endif
         result(nil);
     } else if ([call.method isEqualToString:@"MixWithOthers"]) {
         [[maybe_unused]] const auto value = ((NSNumber*)call.arguments[@"value"]).boolValue;

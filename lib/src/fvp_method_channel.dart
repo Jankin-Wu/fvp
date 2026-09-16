@@ -42,6 +42,13 @@ class MethodChannelFvp extends FvpPlatform {
   }
 
   @override
+  Future<void> releasePlatformView(int playerHandle) async {
+    await methodChannel.invokeMethod('ReleasePlatformView', {
+      "player": playerHandle,
+    });
+  }
+
+  @override
   Future<void> setMixWithOthers(bool mixWithOthers) async {
     await methodChannel.invokeMethod('MixWithOthers', {
       "value": mixWithOthers,
