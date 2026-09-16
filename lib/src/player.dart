@@ -195,8 +195,18 @@ class Player {
 
     _receivePort.close();
 
-    Libmdk.instance.mdkPlayerAPI_delete(_pp);
-    calloc.free(_pp);
+    // mdk can deadlock inside mdkPlayerAPI_delete when the player is destroyed
+    // while a seek is still in flight: the FrameReader deactivate path joins a
+    // video decode thread that waits forever on an empty packet queue (seen on
+    // mdk 0.29 and 0.38). Delete on a background isolate so a hung teardown
+    // leaks the worker instead of freezing the platform thread — and with it
+    // the whole app — forever.
+    final ppAddr = _pp.address;
+    unawaited(Isolate.run(() {
+      final pp = Pointer<Pointer<mdkPlayerAPI>>.fromAddress(ppAddr);
+      Libmdk.instance.mdkPlayerAPI_delete(pp);
+      calloc.free(pp);
+    }));
     _pp = nullptr;
     textureId.dispose();
   }
