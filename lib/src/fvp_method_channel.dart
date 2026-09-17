@@ -49,6 +49,20 @@ class MethodChannelFvp extends FvpPlatform {
   }
 
   @override
+  Future<bool> deletePlayerAsync(int ppAddress) async {
+    try {
+      await methodChannel.invokeMethod('DeletePlayerAsync', {
+        "pp": ppAddress,
+      });
+      return true;
+    } catch (_) {
+      // PlatformException / MissingPluginException: the native side has no
+      // async-delete support; the caller falls back to its own deletion path.
+      return false;
+    }
+  }
+
+  @override
   Future<void> setMixWithOthers(bool mixWithOthers) async {
     await methodChannel.invokeMethod('MixWithOthers', {
       "value": mixWithOthers,

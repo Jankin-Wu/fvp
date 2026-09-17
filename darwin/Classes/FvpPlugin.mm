@@ -5,6 +5,7 @@
 #define USE_TEXCACHE 0
 
 #import "FvpPlugin.h"
+
 #if TARGET_OS_OSX
 // macOS-only: HDR-capable CAMetalLayer-backed platform view. This source is
 // also compiled for iOS, where AppKit and CAMetalLayer are unavailable.
@@ -19,6 +20,8 @@
 #include <mutex>
 #include <unordered_map>
 #include <iostream>
+#include <thread>
+#include <cstdlib>
 
 using namespace mdk;
 using namespace std;
@@ -189,6 +192,22 @@ private:
         const auto handle = ((NSNumber*)call.arguments[@"player"]).longLongValue;
         [FvpVideoView detachPlayerHandle:handle];
 #endif
+        result(nil);
+    } else if ([call.method isEqualToString:@"DeletePlayerAsync"]) {
+        // Deletes the mdk player API object on a detached native thread.
+        // mdkPlayerAPI_delete can deadlock when a seek or reader job is still
+        // in flight (FrameReader deactivate joins a decode thread waiting on
+        // an empty packet queue). A detached pthread that hangs leaks one
+        // thread but never blocks process exit, unlike a Dart isolate: the VM
+        // waits for every isolate to shut down before the process can quit.
+        // The pp pointer (mdkPlayerAPI**) was allocated by the Dart side with
+        // the system allocator; ownership transfers to this thread.
+        const auto ppAddr = ((NSNumber*)call.arguments[@"pp"]).longLongValue;
+        std::thread([ppAddr] {
+            auto pp = reinterpret_cast<const mdkPlayerAPI**>(ppAddr);
+            mdkPlayerAPI_delete(pp);
+            free(reinterpret_cast<void*>(ppAddr));
+        }).detach();
         result(nil);
     } else if ([call.method isEqualToString:@"SetDanmakuList"]) {
         [self withDanmakuView:call.arguments result:result block:^(FvpDanmakuView* view) {

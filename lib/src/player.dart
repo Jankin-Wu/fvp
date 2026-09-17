@@ -198,15 +198,28 @@ class Player {
     // mdk can deadlock inside mdkPlayerAPI_delete when the player is destroyed
     // while a seek is still in flight: the FrameReader deactivate path joins a
     // video decode thread that waits forever on an empty packet queue (seen on
-    // mdk 0.29 and 0.38). Delete on a background isolate so a hung teardown
+    // mdk 0.29 and 0.38). Delete off the calling thread so a hung teardown
     // leaks the worker instead of freezing the platform thread — and with it
     // the whole app — forever.
+    //
+    // Prefer a detached NATIVE thread (deletePlayerAsync) over a Dart
+    // isolate: Dart::Cleanup() waits for every isolate of the group to shut
+    // down before the process can exit, so a delete isolate hung on the mdk
+    // deadlock above wedges application termination (Cmd+Q) even though the
+    // UI threads are already gone. A leaked detached pthread does not block
+    // exit(). Platforms without native support fall back to the isolate.
     final ppAddr = _pp.address;
-    unawaited(Isolate.run(() {
-      final pp = Pointer<Pointer<mdkPlayerAPI>>.fromAddress(ppAddr);
-      Libmdk.instance.mdkPlayerAPI_delete(pp);
-      calloc.free(pp);
-    }));
+    var deletedNatively = false;
+    try {
+      deletedNatively = await FvpPlatform.instance.deletePlayerAsync(ppAddr);
+    } catch (_) {}
+    if (!deletedNatively) {
+      unawaited(Isolate.run(() {
+        final pp = Pointer<Pointer<mdkPlayerAPI>>.fromAddress(ppAddr);
+        Libmdk.instance.mdkPlayerAPI_delete(pp);
+        calloc.free(pp);
+      }));
+    }
     _pp = nullptr;
     textureId.dispose();
   }
