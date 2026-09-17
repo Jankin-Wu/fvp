@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import "FvpVideoView.h"
+#import "FvpVideoView+Internal.h"
 
 #if TARGET_OS_OSX
+
+#import "FvpDanmakuView.h"
 
 #include "mdk/Player.h"
 #include "mdk/RenderAPI.h"
@@ -163,6 +165,9 @@ private:
     int _videoHeight;
     BOOL _disposed;
     int64_t _playerHandle;
+    /// Danmaku/subtitle overlay drawn above the video layer, created on demand
+    /// when Dart first sends overlay content.
+    FvpDanmakuView* _danmakuView;
     /// Set in -dealloc so dispose skips the mdk callback teardown, which
     /// asserts when called from a destructor.
     BOOL deallocating_;
@@ -227,6 +232,22 @@ static void DetachPlayerView(int64_t playerHandle) {
     [ActiveViewMap() removeObjectForKey:@(playerHandle)];
     [ActiveViewLock() unlock];
     [view dispose];
+}
+
++ (nullable mdk::Player*)playerHandle:(int64_t)playerHandle
+{
+    [ActiveViewLock() lock];
+    FvpVideoView* view = ActiveViewMap()[@(playerHandle)];
+    [ActiveViewLock() unlock];
+    return [view player];
+}
+
++ (nullable FvpVideoView*)activeViewForHandle:(int64_t)playerHandle
+{
+    [ActiveViewLock() lock];
+    FvpVideoView* view = ActiveViewMap()[@(playerHandle)];
+    [ActiveViewLock() unlock];
+    return view;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame
@@ -294,6 +315,35 @@ static void DetachPlayerView(int64_t playerHandle) {
     [self updateDrawableSize];
 }
 
+/// The live player this view renders, for overlays that need a playback clock.
+- (nullable mdk::Player*)player {
+    return _player ? _player.get() : nullptr;
+}
+
+/// The overlay drawing danmaku and subtitles above the video layer, created on
+/// first use.
+///
+/// The overlay is a subview rather than a sibling so it is carried along by
+/// whatever the compositor does to this view, and it sits above the metal layer
+/// by being added after `self.layer` is assigned.
+- (nullable FvpDanmakuView*)danmakuView {
+    return _danmakuView;
+}
+
+- (nullable FvpDanmakuView*)ensureDanmakuView {
+    if (_danmakuView != nil) {
+        return _danmakuView;
+    }
+    FvpDanmakuView* overlay = [[FvpDanmakuView alloc] initWithPlayerHandle:_playerHandle];
+    if (overlay == nil) {
+        return nil;
+    }
+    overlay.frame = self.bounds;
+    [self addSubview:overlay];
+    _danmakuView = overlay;
+    return overlay;
+}
+
 + (void)detachPlayerHandle:(int64_t)playerHandle {
     DetachPlayerView(playerHandle);
 }
@@ -336,6 +386,11 @@ static void DetachPlayerView(int64_t playerHandle) {
         return;
     }
     _disposed = YES;
+    // Tear the overlay down before the player goes away: it reads the player's
+    // playback clock every frame.
+    [_danmakuView teardown];
+    [_danmakuView removeFromSuperview];
+    _danmakuView = nil;
     // Stop the renderer while this view is still a live object. The intended
     // path is the Dart side calling releasePlatformView on player disposal; a
     // view that is merely deallocated (never disposed) skips the mdk callback

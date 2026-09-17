@@ -12,6 +12,8 @@
 #import <Cocoa/Cocoa.h>
 #import <FlutterMacOS/FlutterMacOS.h>
 
+@class FvpDanmakuView;
+
 /// Platform view presenting video through its own `CAMetalLayer` instead of a
 /// Flutter texture.
 ///
@@ -30,10 +32,10 @@
 /// and externally loaded subtitle tracks into this layer itself.
 @interface FvpVideoView : NSView
 
-- (instancetype)initWithFrame:(NSRect)frame
-                   playerHandle:(int64_t)playerHandle
-                          width:(int)width
-                         height:(int)height;
+- (_Nullable instancetype)initWithFrame:(NSRect)frame
+                           playerHandle:(int64_t)playerHandle
+                                  width:(int)width
+                                 height:(int)height;
 
 /// Detaches the renderer and releases the native player wrapper.
 - (void)dispose;
@@ -45,6 +47,23 @@
 /// re-inserts platform views on every presented frame, and mdk asserts if its
 /// render callback is changed from that path.
 + (void)detachPlayerHandle:(int64_t)playerHandle;
+
+/// The view currently rendering `playerHandle`'s output, or nil.
+///
+/// Used by the platform channel to reach the overlay of whichever view is live;
+/// the returned view must only be touched on the main thread.
++ (nullable FvpVideoView*)activeViewForHandle:(int64_t)playerHandle;
+
+/// The danmaku/subtitle overlay mounted on this view, or nil when none has been
+/// created yet.
+@property (nullable, nonatomic, readonly) FvpDanmakuView* danmakuView;
+
+/// Returns the overlay, creating and mounting it on the first call.
+///
+/// The overlay must be a subview of this view to composite above the metal
+/// layer, and it is created lazily so playback without danmaku pays nothing.
+/// Main thread only.
+- (nullable FvpDanmakuView*)ensureDanmakuView;
 
 @end
 

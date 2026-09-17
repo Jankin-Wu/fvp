@@ -8,7 +8,8 @@
 #if TARGET_OS_OSX
 // macOS-only: HDR-capable CAMetalLayer-backed platform view. This source is
 // also compiled for iOS, where AppKit and CAMetalLayer are unavailable.
-#import "FvpVideoView.h"
+#import "FvpVideoView+Internal.h"
+#import "FvpDanmakuView.h"
 #endif
 #include "mdk/RenderAPI.h"
 #include "mdk/Player.h"
@@ -189,6 +190,37 @@ private:
         [FvpVideoView detachPlayerHandle:handle];
 #endif
         result(nil);
+    } else if ([call.method isEqualToString:@"SetDanmakuList"]) {
+        [self withDanmakuView:call.arguments result:result block:^(FvpDanmakuView* view) {
+            [view setDanmakuList:call.arguments[@"list"]];
+        }];
+    } else if ([call.method isEqualToString:@"UpdateDanmakuOptions"]) {
+        [self withDanmakuView:call.arguments result:result block:^(FvpDanmakuView* view) {
+            [view setOptions:call.arguments];
+        }];
+    } else if ([call.method isEqualToString:@"PauseDanmaku"]) {
+        [self withDanmakuView:call.arguments result:result block:^(FvpDanmakuView* view) {
+            [view pauseDanmaku];
+        }];
+    } else if ([call.method isEqualToString:@"ResumeDanmaku"]) {
+        [self withDanmakuView:call.arguments result:result block:^(FvpDanmakuView* view) {
+            [view resumeDanmaku];
+        }];
+    } else if ([call.method isEqualToString:@"ClearDanmaku"]) {
+        [self withDanmakuView:call.arguments result:result block:^(FvpDanmakuView* view) {
+            [view clearDanmaku];
+        }];
+    } else if ([call.method isEqualToString:@"SetDanmakuVisible"]) {
+        [self withDanmakuView:call.arguments result:result block:^(FvpDanmakuView* view) {
+            [view setDanmakuVisible:((NSNumber*)call.arguments[@"visible"]).boolValue];
+        }];
+    } else if ([call.method isEqualToString:@"SetSubtitleLines"]) {
+        [self withDanmakuView:call.arguments result:result block:^(FvpDanmakuView* view) {
+            [view setSubtitleLines:call.arguments[@"lines"]
+                          fontSize:((NSNumber*)call.arguments[@"fontSize"]).doubleValue
+                     bottomPadding:((NSNumber*)call.arguments[@"bottomPadding"]).doubleValue
+                           opacity:((NSNumber*)call.arguments[@"opacity"]).doubleValue];
+        }];
     } else if ([call.method isEqualToString:@"MixWithOthers"]) {
         [[maybe_unused]] const auto value = ((NSNumber*)call.arguments[@"value"]).boolValue;
 #if TARGET_OS_OSX
@@ -209,6 +241,38 @@ private:
 - (void)detachFromEngineForRegistrar:(NSObject<FlutterPluginRegistrar> *)registrar {
   players.clear();
 }
+
+#if TARGET_OS_OSX
+/// Runs [block] against the danmaku overlay of the player named in [arguments].
+///
+/// A method call arrives on Flutter's platform thread, but AppKit requires its
+/// own; the work is therefore hopped to the main thread. The overlay is created
+/// on first use, so a call that arrives before anything has been sent simply
+/// returns — there is nothing to apply it to.
+///
+/// `result` is intentionally completed with nil up front rather than after the
+/// hop: these calls are fire-and-forget, and waiting for a round trip to the
+/// main thread would make the Dart side's `dispose()` path block behind
+/// whatever the main thread is doing.
+- (void)withDanmakuView:(NSDictionary*)arguments
+                 result:(FlutterResult)result
+                  block:(void (^)(FvpDanmakuView*))block
+{
+    result(nil);
+    const auto handle = ((NSNumber*)arguments[@"player"]).longLongValue;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        FvpVideoView* view = [FvpVideoView activeViewForHandle:handle];
+        if (view == nil) {
+            return;
+        }
+        FvpDanmakuView* overlay = [view ensureDanmakuView];
+        if (overlay == nil) {
+            return;
+        }
+        block(overlay);
+    });
+}
+#endif
 
 #if TARGET_OS_OSX
 #else

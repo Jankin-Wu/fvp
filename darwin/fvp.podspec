@@ -21,6 +21,10 @@ Flutter video player plugin.
   s.source           = { :path => '.' }
   s.source_files     = 'Classes/**/*'
   s.public_header_files = 'Classes/**/*.h'
+  # Public headers form the framework umbrella header, which Swift imports (via
+  # GeneratedPluginRegistrant). Headers that reach the C++ standard library must
+  # stay out of it: Clang cannot build a module from them.
+  s.private_header_files = 'Classes/*+Internal.h'
   s.ios.dependency 'Flutter'
   s.osx.dependency 'FlutterMacOS'
   s.ios.deployment_target = '12.0'
