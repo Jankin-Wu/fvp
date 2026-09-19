@@ -31,7 +31,7 @@ static const CGFloat kLineHeight = 1.6;
 /// as a percentage of the font size, unlike Flutter's point-based
 /// `strokeWidth: 1.5`, so it is converted using the current font size.
 static const CGFloat kDanmakuStrokeWidthPoints = 1.5;
-static const CGFloat kSubtitleStrokeWidthPoints = 2.0;
+static const CGFloat kSubtitleStrokeWidthPoints = 0.8;
 
 /// Gap between stacked subtitle lines, in points.
 static const CGFloat kSubtitleLineGap = 2.0;
@@ -718,6 +718,18 @@ typedef NS_ENUM(NSInteger, FvpDanmakuMotion) {
     return font;
 }
 
+/// Subtitles render in a heavier weight than danmaku so the white glyphs read
+/// clearly against bright video without a thick black stroke. Two weight
+/// steps take e.g. PingFang SC Regular to Bold.
+- (NSFont*)subtitleFontOfSize:(CGFloat)size
+{
+    NSFont* font = [self fontOfSize:size];
+    NSFontManager* fontManager = [NSFontManager sharedFontManager];
+    NSFont* heavier = [fontManager convertWeight:YES ofFont:font];
+    heavier = [fontManager convertWeight:YES ofFont:heavier] ?: heavier;
+    return heavier ?: font;
+}
+
 - (NSDictionary*)textAttributesWithColor:(NSColor*)color strokeWidth:(CGFloat)strokePoints
 {
     return @{
@@ -782,13 +794,21 @@ typedef NS_ENUM(NSInteger, FvpDanmakuMotion) {
         return;
     }
 
-    NSFont* font = [self fontOfSize:fontSize];
+    NSFont* font = [self subtitleFontOfSize:fontSize];
     NSDictionary* attributes = @{
         NSFontAttributeName: font,
         NSForegroundColorAttributeName: [NSColor whiteColor],
         NSStrokeWidthAttributeName: @(-kSubtitleStrokeWidthPoints / fontSize * 100.0),
-        NSStrokeColorAttributeName: [NSColor blackColor],
+        // A soft, semi-transparent stroke: legibility without a hard edge.
+        NSStrokeColorAttributeName: [NSColor colorWithWhite:0.0 alpha:0.6],
     };
+
+    // Lines longer than the video area wrap instead of overflowing the
+    // screen; 24pt side margins mirror the Flutter renderer's padding.
+    const CGFloat subtitleSideMargin = 24.0;
+    const CGFloat minWrapWidth = 80.0;
+    CGFloat wrapWidth = MAX(self.bounds.size.width - 2.0 * subtitleSideMargin,
+                            minWrapWidth);
 
     for (NSString* line in lines) {
         if (![line isKindOfClass:[NSString class]] || line.length == 0) {
@@ -796,10 +816,18 @@ typedef NS_ENUM(NSInteger, FvpDanmakuMotion) {
         }
         NSAttributedString* string = [[NSAttributedString alloc] initWithString:line
                                                                      attributes:attributes];
-        CGSize size = string.size;
+        CGSize singleLineSize = string.size;
+        CGSize size = singleLineSize;
+        BOOL wraps = singleLineSize.width > wrapWidth;
+        if (wraps) {
+            CGRect rect = [string boundingRectWithSize:CGSizeMake(wrapWidth, CGFLOAT_MAX)
+                                               options:NSStringDrawingUsesLineFragmentOrigin
+                                               context:nil];
+            size = CGSizeMake(wrapWidth, ceil(rect.size.height));
+        }
         CATextLayer* layer = [CATextLayer layer];
         layer.contentsScale = _overlayLayer.contentsScale;
-        layer.wrapped = NO;
+        layer.wrapped = wraps;
         layer.alignmentMode = kCAAlignmentCenter;
         layer.truncationMode = kCATruncationNone;
         layer.string = string;
@@ -818,9 +846,16 @@ typedef NS_ENUM(NSInteger, FvpDanmakuMotion) {
     if (_subtitleLayers.count == 0) {
         return;
     }
-    // Lines stack upward from the caller's bottom padding, so a second line
-    // grows away from the bottom edge rather than off it.
-    CGFloat y = self.bounds.size.height - _subtitleBottomPadding;
+    // The view's layer is not geometry-flipped, so y grows upward and a
+    // layer's position (anchorPoint 0,0 = its bottom-left) is its distance
+    // from the bottom edge. Anchor the block _subtitleBottomPadding above the
+    // bottom edge and stack the lines upward in reading order.
+    CGFloat blockHeight = 0;
+    for (CATextLayer* layer in _subtitleLayers) {
+        blockHeight += layer.bounds.size.height;
+    }
+    blockHeight += kSubtitleLineGap * (CGFloat)(_subtitleLayers.count - 1);
+    CGFloat y = _subtitleBottomPadding + blockHeight;
     for (CATextLayer* layer in _subtitleLayers) {
         CGFloat height = layer.bounds.size.height;
         y -= height;
